@@ -1,0 +1,16 @@
+[package]
+name = "DexlynEconia"
+version = "0.1.0"
+
+[addresses]
+econia = "0xc0de"
+# Mock addresses for testing.
+user = "0x1234"
+user_0 = "0x2345"
+user_1 = "0x3456"
+integrator = "0x4567"
+
+[dependencies.SupraFramework]
+git = "https://github.com/Entropy-Foundation/aptos-core.git"
+rev = "dev"
+subdir = "aptos-move/framework/supra-framework"
