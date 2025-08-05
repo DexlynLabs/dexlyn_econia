@@ -599,7 +599,7 @@ module econia::market {
         Self, CustodianCapability, GenericAsset, UnderwriterCapability};
     use econia::resource_account;
     use econia::tablist::{Self, Tablist};
-    use econia::user::{Self, CancelOrderEvent, FillEvent};
+    use econia::user::{Self, FillEvent};
     use std::option::{Self, Option};
     use std::signer::address_of;
     use std::string::{Self, String};
@@ -723,6 +723,33 @@ module econia::market {
         order_id: u128
     }
 
+    #[event]
+    /// Created for swapper as we converted event to module event
+    struct SwapperPlaceSwapOrderEvent has copy, drop, store {
+        /// Market ID for order.
+        market_id: u64,
+        /// Signing account if swap is placed by a signing swapper, else
+        /// `NO_TAKER_ADDRESS`.
+        signing_account: address,
+        /// Integrator address passed during swap order placement,
+        /// eligible for a portion of any generated taker fees.
+        integrator: address,
+        /// Either `BUY` or `SELL`.
+        direction: bool,
+        /// Indicated minimum base subunits to trade.
+        min_base: u64,
+        /// Indicated maximum base subunits to trade.
+        max_base: u64,
+        /// Indicated minimum quote subunits to trade.
+        min_quote: u64,
+        /// Indicated maximum quote subunits to trade.
+        max_quote: u64,
+        /// Indicated limit price.
+        limit_price: u64,
+        /// Unique ID for order within market.
+        order_id: u128
+    }
+
     /// A price level from an `OrderBook`.
     struct PriceLevel has copy, drop {
         /// Price, in ticks per lot.
@@ -744,6 +771,70 @@ module econia::market {
         bids: vector<PriceLevel>
     }
 
+    #[event]
+    /// Created for market as we converted event to module event
+    struct MarketCancelOrderEvent has copy, drop, store {
+        /// Market ID for order.
+        market_id: u64,
+        /// Unique ID for order within market.
+        order_id: u128,
+        /// User for market account that placed order.
+        user: address,
+        /// Custodian ID for market account that placed order.
+        custodian_id: u64,
+        /// Reason for the cancel, for example
+        /// `CANCEL_REASON_MANUAL_CANCEL`.
+        reason: u8
+    }
+
+    #[event]
+    /// Created for swapper as we converted event to module event
+    struct SwapperCancelOrderEvent has copy, drop, store {
+        /// Market ID for order.
+        market_id: u64,
+        /// Unique ID for order within market.
+        order_id: u128,
+        /// User for market account that placed order.
+        user: address,
+        /// Custodian ID for market account that placed order.
+        custodian_id: u64,
+        /// Reason for the cancel, for example
+        /// `CANCEL_REASON_MANUAL_CANCEL`.
+        reason: u8
+    }
+
+    #[event]
+    /// Created for swapper as we converted event to module event
+    struct SwapperFillEvent has copy, drop, store {
+        /// Market ID for fill.
+        market_id: u64,
+        /// Amount filled, in lots.
+        size: u64,
+        /// Fill price, in ticks per lot.
+        price: u64,
+        /// `ASK` or `BID`, the side of the maker order.
+        maker_side: bool,
+        /// User address associated with market account for maker.
+        maker: address,
+        /// Custodian ID associated with market account for maker.
+        maker_custodian_id: u64,
+        /// Order ID for maker, unique within the market.
+        maker_order_id: u128,
+        /// User address associated with market account for taker.
+        taker: address,
+        /// Custodian ID associated with market account for taker.
+        taker_custodian_id: u64,
+        /// Order ID for taker, unique within the market.
+        taker_order_id: u128,
+        /// Amount of fees paid by taker on the fill, in indivisible
+        /// quote subunits.
+        taker_quote_fees_paid: u64,
+        /// Sequence number (0-indexed) of fill within a single trade,
+        /// which may have more than one fill. For example if a market
+        /// order results in two fills, the first will have sequence
+        /// number 0 and the second will have sequence number 1.
+        sequence_number_for_trade: u64
+    }
     // Structs <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
     // Error codes >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -2067,6 +2158,7 @@ module econia::market {
              coin::zero<QuoteType>());
         // Swap against the order book, deferring market events.
         let fill_event_queue = vector[];
+        let swapper_fill_event_queue = vector<SwapperFillEvent>[];
         let (
             optional_base_coins,
             quote_coins,
@@ -2077,6 +2169,7 @@ module econia::market {
             cancel_order_event_option
         ) = swap(
             &mut fill_event_queue,
+            &mut swapper_fill_event_queue,
             user_address,
             market_id,
             NO_UNDERWRITER,
@@ -2094,13 +2187,15 @@ module econia::market {
         // Emit place swap order event.
         event::emit(option::destroy_some(place_swap_order_event_option));
         // Emit fill events first-in-first-out.
-        vector::for_each_ref(&fill_event_queue, |fill_event_ref| {
-            let fill_event: FillEvent = *fill_event_ref;
+        vector::for_each_ref(&swapper_fill_event_queue, |fill_event_ref| {
+            let fill_event: SwapperFillEvent = *fill_event_ref;
             event::emit(fill_event);
         });
         // Optionally emit cancel event.
-        if (option::is_some(&cancel_order_event_option))
+        if (option::is_some(&cancel_order_event_option)) {
             event::emit(option::destroy_some(cancel_order_event_option));
+        };
+
         // Deposit base coins back to user's coin store.
         coin::deposit(user_address, option::destroy_some(optional_base_coins));
         // Deposit quote coins back to user's coin store.
@@ -2226,6 +2321,7 @@ module econia::market {
             _
         ) = swap(
             &mut vector[],
+            &mut vector[],
             NO_TAKER_ADDRESS,
             market_id,
             NO_UNDERWRITER,
@@ -2344,6 +2440,7 @@ module econia::market {
             _,
             _
         ) = swap(
+            &mut vector[],
             &mut vector[],
             NO_TAKER_ADDRESS,
             market_id,
@@ -3223,6 +3320,7 @@ module econia::market {
     >(
         market_id: u64,
         fill_event_queue_ref_mut: &mut vector<FillEvent>,
+        swapper_fill_event_queue_ref_mut: &mut vector<SwapperFillEvent>,
         order_book_ref_mut: &mut OrderBook,
         taker: address,
         custodian_id: u64,
@@ -3395,6 +3493,11 @@ module econia::market {
                     maker_custodian_id, market_order_id, taker, custodian_id,
                     order_id, fees_paid_for_fill, fill_count);
                 vector::push_back(fill_event_queue_ref_mut, fill_event);
+                let swapper_fill_event = create_fill_event_swapper_internal(
+                    market_id, fill_size, price, side, maker,
+                    maker_custodian_id, market_order_id, taker, custodian_id,
+                    order_id, fees_paid_for_fill, fill_count);
+                vector::push_back(swapper_fill_event_queue_ref_mut, swapper_fill_event);
                 // Update fill iteration counters.
                 fill_count = fill_count + 1;
                 fees_paid = fees_paid + fees_paid_for_fill;
@@ -3663,6 +3766,7 @@ module econia::market {
         let (base_traded, quote_traded, fees) = (0, 0, 0);
         let cancel_reason_option = option::none();
         let fill_event_queue = vector[];
+        let swapper_fill_event_queue = vector[];
         let remaining_size = size;
         if (crosses_spread) { // If order price crosses spread:
             // Calculate max base and quote to withdraw. If a buy:
@@ -3690,6 +3794,7 @@ module econia::market {
             ) = match_order(
                 market_id,
                 &mut fill_event_queue,
+                &mut swapper_fill_event_queue,
                 order_book_ref_mut,
                 user_address,
                 custodian_id,
@@ -4104,6 +4209,7 @@ module econia::market {
         let limit_price = if (direction == SELL) 0 else HI_PRICE;
         // Match against order book, deferring fill events.
         let fill_event_queue = vector[];
+        let swapper_fill_event_queue = vector<SwapperFillEvent>[];
         let (
             optional_base_coins,
             quote_coins,
@@ -4116,6 +4222,7 @@ module econia::market {
         ) = match_order(
             market_id,
             &mut fill_event_queue,
+            &mut swapper_fill_event_queue,
             order_book_ref_mut,
             user_address,
             custodian_id,
@@ -4390,6 +4497,7 @@ module econia::market {
         QuoteType
     >(
         fill_event_queue_ref_mut: &mut vector<FillEvent>,
+        swapper_fill_event_queue_ref_mut: &mut vector<SwapperFillEvent>,
         signer_address: address,
         market_id: u64,
         underwriter_id: u64,
@@ -4408,8 +4516,8 @@ module econia::market {
         u64,
         u64,
         u64,
-        Option<PlaceSwapOrderEvent>,
-        Option<CancelOrderEvent>
+        Option<SwapperPlaceSwapOrderEvent>,
+        Option<SwapperCancelOrderEvent>
     ) acquires OrderBooks
     {
         // Get address of resource account where order books are stored.
@@ -4442,6 +4550,7 @@ module econia::market {
         ) = match_order(
             market_id,
             fill_event_queue_ref_mut,
+            swapper_fill_event_queue_ref_mut,
             order_book_ref_mut,
             signer_address,
             NO_CUSTODIAN,
@@ -4473,14 +4582,31 @@ module econia::market {
             limit_price,
             order_id: market_order_id
         };
+        let swapper_place_swap_order_event = SwapperPlaceSwapOrderEvent{
+            market_id,
+            signing_account: signer_address,
+            integrator,
+            direction,
+            min_base,
+            max_base,
+            min_quote,
+            max_quote,
+            limit_price,
+            order_id: market_order_id
+        };
         let cancel_reason_option =
             get_cancel_reason_option_for_market_order_or_swap(
                 self_match_taker_cancel, base_traded, max_base,
                 liquidity_gone, order_book_ref_mut.lot_size,
                 violated_limit_price);
         let need_to_cancel = option::is_some(&cancel_reason_option);
-        let cancel_order_event_option = if (need_to_cancel)
-            option::some(user::create_cancel_order_event_internal(
+        let cancel_order_event_market_option = if (need_to_cancel)
+            option::some(create_cancel_order_event_market_internal(
+                market_id, market_order_id, signer_address, NO_CUSTODIAN,
+                option::destroy_some(cancel_reason_option))) else
+            option::none();
+        let cancel_order_event_swapper_option = if (need_to_cancel)
+            option::some(create_cancel_order_event_swapper_internal(
                 market_id, market_order_id, signer_address, NO_CUSTODIAN,
                 option::destroy_some(cancel_reason_option))) else
             option::none();
@@ -4489,16 +4615,16 @@ module econia::market {
         // If swap not placed by a signing swapper:
         if (signer_address == NO_TAKER_ADDRESS) {
             event::emit(place_swap_order_event);
-            if (need_to_cancel) event::emit(option::extract(&mut cancel_order_event_option));
+            if (need_to_cancel) event::emit(option::extract(&mut cancel_order_event_market_option));
         } else { // Otherwise swap order placed by signing swapper.
             option::fill(&mut place_swap_order_event_option,
-                         place_swap_order_event);
+                         swapper_place_swap_order_event);
         };
         user::emit_swap_maker_fill_events_internal(fill_event_queue_ref_mut);
         // Return optionally modified asset inputs, trade amounts, fees,
         // place swap order event option, and cancel order event option.
         (optional_base_coins, quote_coins, base_traded, quote_traded, fees,
-         place_swap_order_event_option, cancel_order_event_option)
+         place_swap_order_event_option, cancel_order_event_swapper_option)
     }
 
     /// Verify pagination function order IDs are valid for market.
@@ -4599,51 +4725,116 @@ module econia::market {
     }
 
     #[test_only]
-    /// Get `CancelOrderEvent`s at market level.
+    /// Get `MarketCancelOrderEvent`s at market level.
     public fun get_cancel_order_events_market_test(
-        market_id: u64
-    ): vector<CancelOrderEvent>
+        _market_id: u64
+    ): vector<MarketCancelOrderEvent>
     {
-        event::emitted_events<CancelOrderEvent>()
+        event::emitted_events<MarketCancelOrderEvent>()
+    }
+
+    /// Return a `MarketCancelOrderEvent` with the indicated fields.
+    fun create_cancel_order_event_market_internal(
+        market_id: u64,
+        order_id: u128,
+        user: address,
+        custodian_id: u64,
+        reason: u8
+    ): MarketCancelOrderEvent {
+        MarketCancelOrderEvent {
+            market_id,
+            order_id,
+            user,
+            custodian_id,
+            reason
+        }
     }
 
     #[test_only]
     /// Get `CancelOrderEvent`s at swapper level.
     public fun get_cancel_order_events_swapper_test(
-        market_id: u64,
-        swapper: address
-    ): vector<CancelOrderEvent>
+        _market_id: u64,
+        _swapper: address
+    ): vector<SwapperCancelOrderEvent>
     {
-        event::emitted_events<CancelOrderEvent>()
+        event::emitted_events<SwapperCancelOrderEvent>()
+    }
+
+    /// Return a `CancelOrderEvent` with the indicated fields.
+    fun create_cancel_order_event_swapper_internal(
+        market_id: u64,
+        order_id: u128,
+        user: address,
+        custodian_id: u64,
+        reason: u8
+    ): SwapperCancelOrderEvent {
+        SwapperCancelOrderEvent{
+            market_id,
+            order_id,
+            user,
+            custodian_id,
+            reason
+        }
     }
 
     #[test_only]
     /// Get `FillEvent`s at swapper level.
     public fun get_fill_events_swapper_test(
-        market_id: u64,
-        swapper: address
-    ): vector<FillEvent>
+        _market_id: u64,
+        _swapper: address
+    ): vector<SwapperFillEvent>
     {
-        event::emitted_events<FillEvent>()
+        event::emitted_events<SwapperFillEvent>()
+    }
+
+    /// Return a `FillEvent` with the indicated fields.
+    fun create_fill_event_swapper_internal(
+        market_id: u64,
+        size: u64,
+        price: u64,
+        maker_side: bool,
+        maker: address,
+        maker_custodian_id: u64,
+        maker_order_id: u128,
+        taker: address,
+        taker_custodian_id: u64,
+        taker_order_id: u128,
+        taker_quote_fees_paid: u64,
+        sequence_number_for_trade: u64
+    ): SwapperFillEvent {
+        SwapperFillEvent {
+            market_id,
+            size,
+            price,
+            maker_side,
+            maker,
+            maker_custodian_id,
+            maker_order_id,
+            taker,
+            taker_custodian_id,
+            taker_order_id,
+            taker_quote_fees_paid,
+            sequence_number_for_trade
+        }
     }
 
     #[test_only]
     /// Get `PlaceSwapOrderEvent`s at market level.
     public fun get_place_swap_order_events_market_test(
-        market_id: u64
+        _market_id: u64
     ): vector<PlaceSwapOrderEvent>
     {
         event::emitted_events<PlaceSwapOrderEvent>()
     }
 
     #[test_only]
-    /// Get `PlaceSwapOrderEvent`s at swapper level.
+    /// Get `SwapperPlaceSwapOrderEvent`s at swapper level.
     public fun get_place_swap_order_events_swapper_test(
-        market_id: u64,
-        swapper: address
-    ): vector<PlaceSwapOrderEvent>
+        _market_id: u64,
+        _swapper: address
+    ): vector<SwapperPlaceSwapOrderEvent>
     {
-        event::emitted_events<PlaceSwapOrderEvent>()
+        event::emitted_events<SwapperPlaceSwapOrderEvent>()
     }
 
     #[test_only]
@@ -7139,7 +7330,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_market_test(
             market_id) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     market_id,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -7235,7 +7426,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_market_test(
             market_id) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     market_id,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -7370,7 +7561,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_market_test(
             market_id) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     market_id,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -8503,7 +8694,7 @@ module econia::market {
                 }
             ], 0);
         assert!(get_cancel_order_events_market_test(market_id) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     market_id,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -8668,7 +8859,7 @@ module econia::market {
                 }
             ], 0);
         assert!(get_cancel_order_events_market_test(market_id) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     market_id,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -8827,7 +9018,7 @@ module econia::market {
                 }
             ], 0);
         assert!(get_cancel_order_events_market_test(market_id) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     market_id,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -14779,13 +14970,27 @@ module econia::market {
             fee,
             0
         );
+        let swapper_fill_event = create_fill_event_swapper_internal(
+            MARKET_ID_COIN,
+            size_taker,
+            price,
+            side_maker,
+            @user_0,
+            NO_CUSTODIAN,
+            market_order_id_0,
+            @user_1,
+            NO_CUSTODIAN,
+            taker_order_id,
+            fee,
+            0
+        );
         assert!(user::get_fill_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[fill_event], 0);
         assert!(user::get_cancel_order_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[], 0);
         assert!(get_place_swap_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                PlaceSwapOrderEvent{
+                SwapperPlaceSwapOrderEvent{
                     market_id: MARKET_ID_COIN,
                     signing_account: @user_1,
                     integrator: @integrator,
@@ -14801,7 +15006,7 @@ module econia::market {
         assert!(get_cancel_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[], 0);
         assert!(get_fill_events_swapper_test(
-            MARKET_ID_COIN, @user_1) == vector[fill_event], 0);
+            MARKET_ID_COIN, @user_1) == vector[swapper_fill_event], 0);
         assert!(get_place_swap_order_events_market_test(
             MARKET_ID_COIN) == vector[], 0);
         assert!(get_cancel_order_events_market_test(
@@ -14949,13 +15154,27 @@ module econia::market {
             fee,
             0
         );
+        let swapper_fill_event = create_fill_event_swapper_internal(
+            MARKET_ID_COIN,
+            size_taker,
+            price,
+            side_maker,
+            @user_0,
+            NO_CUSTODIAN,
+            market_order_id_0,
+            @user_1,
+            NO_CUSTODIAN,
+            taker_order_id,
+            fee,
+            0
+        );
         assert!(user::get_fill_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[fill_event], 0);
         assert!(user::get_cancel_order_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[], 0);
         assert!(get_place_swap_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                PlaceSwapOrderEvent{
+            SwapperPlaceSwapOrderEvent{
                     market_id: MARKET_ID_COIN,
                     signing_account: @user_1,
                     integrator: @integrator,
@@ -14971,7 +15190,7 @@ module econia::market {
         assert!(get_cancel_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[], 0);
         assert!(get_fill_events_swapper_test(
-            MARKET_ID_COIN, @user_1) == vector[fill_event], 0);
+            MARKET_ID_COIN, @user_1) == vector[swapper_fill_event], 0);
         assert!(get_place_swap_order_events_market_test(
             MARKET_ID_COIN) == vector[], 0);
         assert!(get_cancel_order_events_market_test(
@@ -15119,13 +15338,27 @@ module econia::market {
             fee,
             0
         );
+        let swapper_fill_event = create_fill_event_swapper_internal(
+            MARKET_ID_COIN,
+            size_taker,
+            price,
+            side_maker,
+            @user_0,
+            NO_CUSTODIAN,
+            market_order_id_0,
+            @user_1,
+            NO_CUSTODIAN,
+            taker_order_id,
+            fee,
+            0
+        );
         assert!(user::get_fill_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[fill_event], 0);
         assert!(user::get_cancel_order_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[], 0);
         assert!(get_place_swap_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                PlaceSwapOrderEvent{
+            SwapperPlaceSwapOrderEvent{
                     market_id: MARKET_ID_COIN,
                     signing_account: @user_1,
                     integrator: @integrator,
@@ -15140,7 +15373,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_swapper_internal(
                     MARKET_ID_COIN,
                     taker_order_id,
                     @user_1,
@@ -15149,7 +15382,7 @@ module econia::market {
                 )
             ], 0);
         assert!(get_fill_events_swapper_test(
-            MARKET_ID_COIN, @user_1) == vector[fill_event], 0);
+            MARKET_ID_COIN, @user_1) == vector[swapper_fill_event], 0);
         assert!(get_place_swap_order_events_market_test(
             MARKET_ID_COIN) == vector[], 0);
         assert!(get_cancel_order_events_market_test(
@@ -15297,13 +15530,27 @@ module econia::market {
             fee,
             0
         );
+        let swapper_fill_event = create_fill_event_swapper_internal(
+            MARKET_ID_COIN,
+            size_taker,
+            price,
+            side_maker,
+            @user_0,
+            NO_CUSTODIAN,
+            market_order_id_0,
+            @user_1,
+            NO_CUSTODIAN,
+            taker_order_id,
+            fee,
+            0
+        );
         assert!(user::get_fill_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[fill_event], 0);
         assert!(user::get_cancel_order_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[], 0);
         assert!(get_place_swap_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                PlaceSwapOrderEvent{
+            SwapperPlaceSwapOrderEvent{
                     market_id: MARKET_ID_COIN,
                     signing_account: @user_1,
                     integrator: @integrator,
@@ -15318,7 +15565,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_swapper_internal(
                     MARKET_ID_COIN,
                     taker_order_id,
                     @user_1,
@@ -15327,7 +15574,7 @@ module econia::market {
                 )
             ], 0);
         assert!(get_fill_events_swapper_test(
-            MARKET_ID_COIN, @user_1) == vector[fill_event], 0);
+            MARKET_ID_COIN, @user_1) == vector[swapper_fill_event], 0);
         assert!(get_place_swap_order_events_market_test(
             MARKET_ID_COIN) == vector[], 0);
         assert!(get_cancel_order_events_market_test(
@@ -15476,13 +15723,27 @@ module econia::market {
             fee,
             0
         );
+        let swapper_fill_event = create_fill_event_swapper_internal(
+            MARKET_ID_COIN,
+            size_taker,
+            price,
+            side_maker,
+            @user_0,
+            NO_CUSTODIAN,
+            market_order_id_0,
+            @user_1,
+            NO_CUSTODIAN,
+            taker_order_id,
+            fee,
+            0
+        );
         assert!(user::get_fill_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[fill_event], 0);
         assert!(user::get_cancel_order_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[], 0);
         assert!(get_place_swap_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                PlaceSwapOrderEvent{
+            SwapperPlaceSwapOrderEvent{
                     market_id: MARKET_ID_COIN,
                     signing_account: @user_1,
                     integrator: @integrator,
@@ -15497,7 +15758,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_swapper_internal(
                     MARKET_ID_COIN,
                     taker_order_id,
                     @user_1,
@@ -15506,7 +15767,7 @@ module econia::market {
                 )
             ], 0);
         assert!(get_fill_events_swapper_test(
-            MARKET_ID_COIN, @user_1) == vector[fill_event], 0);
+            MARKET_ID_COIN, @user_1) == vector[swapper_fill_event], 0);
         assert!(get_place_swap_order_events_market_test(
             MARKET_ID_COIN) == vector[], 0);
         assert!(get_cancel_order_events_market_test(
@@ -15658,13 +15919,27 @@ module econia::market {
             fee,
             0
         );
+        let swapper_fill_event = create_fill_event_swapper_internal(
+            MARKET_ID_COIN,
+            size_taker,
+            price,
+            side_maker,
+            @user_0,
+            NO_CUSTODIAN,
+            market_order_id_0,
+            @user_1,
+            NO_CUSTODIAN,
+            taker_order_id,
+            fee,
+            0
+        );
         assert!(user::get_fill_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[fill_event], 0);
         assert!(user::get_cancel_order_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[], 0);
         assert!(get_place_swap_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                PlaceSwapOrderEvent{
+            SwapperPlaceSwapOrderEvent{
                     market_id: MARKET_ID_COIN,
                     signing_account: @user_1,
                     integrator: @integrator,
@@ -15679,7 +15954,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_swapper_internal(
                     MARKET_ID_COIN,
                     taker_order_id,
                     @user_1,
@@ -15688,7 +15963,7 @@ module econia::market {
                 )
             ], 0);
         assert!(get_fill_events_swapper_test(
-            MARKET_ID_COIN, @user_1) == vector[fill_event], 0);
+            MARKET_ID_COIN, @user_1) == vector[swapper_fill_event], 0);
         assert!(get_place_swap_order_events_market_test(
             MARKET_ID_COIN) == vector[], 0);
         assert!(get_cancel_order_events_market_test(
@@ -15827,13 +16102,27 @@ module econia::market {
             fee,
             0
         );
+        let swapper_fill_event = create_fill_event_swapper_internal(
+            MARKET_ID_COIN,
+            size_taker,
+            price,
+            side_maker,
+            @user_0,
+            NO_CUSTODIAN,
+            market_order_id_0,
+            @user_1,
+            NO_CUSTODIAN,
+            taker_order_id,
+            fee,
+            0
+        );
         assert!(user::get_fill_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[fill_event], 0);
         assert!(user::get_cancel_order_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[], 0);
         assert!(get_place_swap_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                PlaceSwapOrderEvent{
+            SwapperPlaceSwapOrderEvent{
                     market_id: MARKET_ID_COIN,
                     signing_account: @user_1,
                     integrator: @integrator,
@@ -15849,7 +16138,7 @@ module econia::market {
         assert!(get_cancel_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[], 0);
         assert!(get_fill_events_swapper_test(
-            MARKET_ID_COIN, @user_1) == vector[fill_event], 0);
+            MARKET_ID_COIN, @user_1) == vector[swapper_fill_event], 0);
         assert!(get_place_swap_order_events_market_test(
             MARKET_ID_COIN) == vector[], 0);
         assert!(get_cancel_order_events_market_test(
@@ -15989,13 +16278,27 @@ module econia::market {
             fee,
             0
         );
+        let swapper_fill_event = create_fill_event_swapper_internal(
+            MARKET_ID_COIN,
+            size_taker,
+            price,
+            side_maker,
+            @user_0,
+            NO_CUSTODIAN,
+            market_order_id_0,
+            @user_1,
+            NO_CUSTODIAN,
+            taker_order_id,
+            fee,
+            0
+        );
         assert!(user::get_fill_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[fill_event], 0);
         assert!(user::get_cancel_order_events_test(
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[], 0);
         assert!(get_place_swap_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                PlaceSwapOrderEvent{
+            SwapperPlaceSwapOrderEvent{
                     market_id: MARKET_ID_COIN,
                     signing_account: @user_1,
                     integrator: @integrator,
@@ -16010,7 +16313,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_swapper_test(
             MARKET_ID_COIN, @user_1) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_swapper_internal(
                     MARKET_ID_COIN,
                     taker_order_id,
                     @user_1,
@@ -16019,7 +16322,7 @@ module econia::market {
                 )
             ], 0);
         assert!(get_fill_events_swapper_test(
-            MARKET_ID_COIN, @user_1) == vector[fill_event], 0);
+            MARKET_ID_COIN, @user_1) == vector[swapper_fill_event], 0);
         assert!(get_place_swap_order_events_market_test(
             MARKET_ID_COIN) == vector[], 0);
         assert!(get_cancel_order_events_market_test(
@@ -16151,7 +16454,7 @@ module econia::market {
             MARKET_ID_COIN, @user_0, NO_CUSTODIAN) == vector[], 0);
         assert!(get_place_swap_order_events_swapper_test(
             MARKET_ID_COIN, @user_0) == vector[
-                PlaceSwapOrderEvent{
+            SwapperPlaceSwapOrderEvent{
                     market_id: MARKET_ID_COIN,
                     signing_account: @user_0,
                     integrator: @integrator,
@@ -16166,7 +16469,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_swapper_test(
             MARKET_ID_COIN, @user_0) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_swapper_internal(
                     MARKET_ID_COIN,
                     taker_order_id,
                     @user_0,
@@ -16679,7 +16982,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_market_test(
             MARKET_ID_COIN) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     MARKET_ID_COIN,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -16855,7 +17158,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_market_test(
             MARKET_ID_COIN) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     MARKET_ID_COIN,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -17198,7 +17501,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_market_test(
             MARKET_ID_COIN) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     MARKET_ID_COIN,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -17543,7 +17846,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_market_test(
             MARKET_ID_GENERIC) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     MARKET_ID_GENERIC,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -17718,7 +18021,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_market_test(
             MARKET_ID_GENERIC) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     MARKET_ID_GENERIC,
                     taker_order_id,
                     NO_TAKER_ADDRESS,
@@ -18060,7 +18363,7 @@ module econia::market {
             ], 0);
         assert!(get_cancel_order_events_market_test(
             MARKET_ID_GENERIC) == vector[
-                user::create_cancel_order_event_internal(
+                create_cancel_order_event_market_internal(
                     MARKET_ID_GENERIC,
                     taker_order_id,
                     NO_TAKER_ADDRESS,

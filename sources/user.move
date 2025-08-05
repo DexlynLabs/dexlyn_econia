@@ -1872,13 +1872,14 @@ module econia::user {
                 reason: *option::borrow(cancel_reason_option_ref)};
             event::emit(event);
         };
+        // code commented as changed event to module event and it is already emitted above as user wise and below is emitted as per maker
         // Emit fill events for all makers, similarly substituting
         // order ID in case order posted after fill event creation.
-        vector::for_each_ref(fill_event_queue_ref, |event_ref| {
+        /*vector::for_each_ref(fill_event_queue_ref, |event_ref| {
             let event: FillEvent = *event_ref;
             event.taker_order_id = order_id;
             emit_maker_fill_event(&event);
-        });
+        });*/
     }
 
     /// Emit market order events to a user's market event handles.
@@ -1938,10 +1939,11 @@ module econia::user {
                 reason: *option::borrow(cancel_reason_option_ref)};
             event::emit(event);
         };
+        // code commented as changed event to module event and it is already emitted above as user wise and below is emitted as per maker
         // Emit fill events for all makers.
-        vector::for_each_ref(fill_event_queue_ref, |event_ref| {
+        /*vector::for_each_ref(fill_event_queue_ref, |event_ref| {
             emit_maker_fill_event(event_ref);
-        });
+        });*/
     }
 
     /// Emit a `FillEvent` for each maker associated with a swap.
@@ -3179,7 +3181,17 @@ module econia::user {
         custodian_id: u64
     ): vector<CancelOrderEvent>
     {
-        event::emitted_events<CancelOrderEvent>()
+        let events = event::emitted_events<CancelOrderEvent>();
+        let result = vector::empty<CancelOrderEvent>();
+        let i = 0;
+        while (i < vector::length(&events)) {
+            let e = *vector::borrow(&events, i);
+            if (e.market_id == market_id && e.user == user && e.custodian_id == custodian_id) {
+                vector::push_back(&mut result, e);
+            };
+            i = i + 1;
+        };
+        result
     }
 
     #[test_only]
@@ -3190,7 +3202,17 @@ module econia::user {
         custodian_id: u64
     ): vector<ChangeOrderSizeEvent>
     {
-        event::emitted_events<ChangeOrderSizeEvent>()
+        let events = event::emitted_events<ChangeOrderSizeEvent>();
+        let result = vector::empty<ChangeOrderSizeEvent>();
+        let i = 0;
+        while (i < vector::length(&events)) {
+            let e = *vector::borrow(&events, i);
+            if (e.market_id == market_id && e.user == user && e.custodian_id == custodian_id) {
+                vector::push_back(&mut result, e);
+            };
+            i = i + 1;
+        };
+        result
     }
 
     #[test_only]
@@ -3228,9 +3250,9 @@ module econia::user {
     #[test_only]
     /// Get `FillEvent`s at a market account handle.
     public fun get_fill_events_test(
-        market_id: u64,
-        user: address,
-        custodian_id: u64
+        _market_id: u64,
+        _user: address,
+        _custodian_id: u64
     ): vector<FillEvent>
     {
         event::emitted_events<FillEvent>()
@@ -3322,7 +3344,17 @@ module econia::user {
         custodian_id: u64
     ): vector<PlaceLimitOrderEvent>
     {
-        event::emitted_events<PlaceLimitOrderEvent>()
+        let events = event::emitted_events<PlaceLimitOrderEvent>();
+        let result = vector::empty<PlaceLimitOrderEvent>();
+        let i = 0;
+        while (i < vector::length(&events)) {
+            let e = *vector::borrow(&events, i);
+            if (e.market_id == market_id && e.user == user && e.custodian_id == custodian_id) {
+                vector::push_back(&mut result, e);
+            };
+            i = i + 1;
+        };
+        result
     }
 
     #[test_only]
@@ -3333,7 +3365,17 @@ module econia::user {
         custodian_id: u64
     ): vector<PlaceMarketOrderEvent>
     {
-        event::emitted_events<PlaceMarketOrderEvent>()
+        let events = event::emitted_events<PlaceMarketOrderEvent>();
+        let result = vector::empty<PlaceMarketOrderEvent>();
+        let i = 0;
+        while (i < vector::length(&events)) {
+            let e = *vector::borrow(&events, i);
+            if (e.market_id == market_id && e.user == user && e.custodian_id == custodian_id) {
+                vector::push_back(&mut result, e);
+            };
+            i = i + 1;
+        };
+        result
     }
 
     #[test_only]
