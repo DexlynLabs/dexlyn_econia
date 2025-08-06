@@ -4656,17 +4656,6 @@ module econia::market {
 
     // Private functions <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-    // Deprecated functions >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
-    /// Deprecated function retained for compatible upgrade policy.
-    ///
-    /// # Coverage testing
-    ///
-    /// * `test_index_orders_sdk_coverage()`
-    public entry fun index_orders_sdk(_0: &signer, _1: u64) {}
-
-    // Deprecated functions <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
     // Test-only functions >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
     #[test_only]
@@ -6990,14 +6979,6 @@ module econia::market {
         init_test(); // Initialize for testing.
         // Assert no order indicated when no markets registered.
         assert!(has_open_order(0, 0) == false, 0);
-    }
-
-    #[test(account = @econia)]
-    /// Invoke deprecated function for test coverage.
-    fun test_index_orders_sdk_coverage(
-        account: &signer
-    ) {
-        index_orders_sdk(account, 0);
     }
 
     #[test]
