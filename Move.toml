@@ -4,7 +4,7 @@ version = "0.1.0"
 upgrade_policy = "compatible"
 
 [addresses]
-econia = "0x1f8d8dd6ed4ea3cd8f9b03f64807b0617222ec5d891613d2e83c5394471c2386"
+econia = "0x7b00569d23c3edd4538d0b6d8db15dd9f9c07e5d830f35b46afbaa670923b450"
 # Mock addresses for testing.
 user = "0x1234"
 user_0 = "0x2345"
